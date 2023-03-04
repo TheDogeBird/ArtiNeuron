@@ -1,3 +1,4 @@
+import base64
 import os
 import random
 import keras
@@ -27,12 +28,12 @@ with open('data/sentiment_analysis.csv', 'a') as f:
 
 import requests
 
-def github_deploy(access_token, repo_name, username, file_path, folder, commit_message):
+def github_deploy(access_token, repo_name, username, file_path, folder, commit_message, commit_branch='main'):
     # Authenticate with GitHub API
     headers = {"Authorization": f"Token {access_token}"}
 
     # Get user and repository
-    url = f"https://api.github.com/repos/{username}/{repo_name}/contents/{folder}/{file_path}"
+    url = f"https://api.github.com/repos/{username}/{repo_name}/contents/{folder}/{file_path}?ref={commit_branch}"
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
         sha = response.json()['sha']
@@ -44,10 +45,10 @@ def github_deploy(access_token, repo_name, username, file_path, folder, commit_m
         content = f.read()
 
     # Create file on GitHub
-    url = f"https://api.github.com/repos/{username}/{repo_name}/contents/{folder}/{file_path}"
+    url = f"https://api.github.com/repos/{username}/{repo_name}/contents/{folder}/{file_path}?ref={commit_branch}"
     payload = {
         "message": commit_message,
-        "content": content.decode('utf-8'),
+        "content": base64.b64encode(content).decode('ascii'),
         "sha": sha
     }
     response = requests.put(url, headers=headers, json=payload)
@@ -106,7 +107,7 @@ class NeuronLayer:
             for next_neuron in next_layer.neurons:
                 neuron.connect(next_neuron)
 
-class Consciousness:
+class Consciousness(object):
     def __init__(self, model):
         self.model = model
         self.memory = []
@@ -139,55 +140,59 @@ class Consciousness:
 
 
 # Define the CustomModel class
+import numpy as np
+import keras
+
+
 class CustomModel:
-    def __init__(self, keras_model, text):
-        self.keras_model = keras_model
-        self.neurons = keras_model.layers
-        self.consciousness = Consciousness(keras_model)
-        self.model = Model(self.consciousness)
+    def __init__(self, model, text):
+        self.model = model
         self.text = text
 
+    def predict(self, input_text, x):
+        # Preprocess the input text
+        max_length = self.model.layers[0].input_shape[1]
+        input_text = input_text.lower().split()
+        input_text = [word for word in input_text if word.isalpha()]
+        input_text = input_text[-max_length:]
+        input_text = ' '.join(input_text)
+        if len(input_text) == 0:
+            return 0.5
+
+        # Use the model to make a prediction
+        prediction = self.model.predict(np.array([input_text]))[0][0]
+        return self.model.predict(x), prediction
+
     def run(self):
-        input_vector = text_to_vector(self.text)
-        self.consciousness.transmit(input_vector)
-        self.consciousness.cycle_neurons()
-        return self.consciousness.memory[-1]
+        # Preprocess the input text
+        input_text = self.text.lower().split()
+        input_text = [word for word in input_text if word.isalpha()]
+        input_text = input_text[-self.model.layers[0].input_shape[1]:]
+        input_text = ' '.join(input_text)
 
-    def activate(self, inputs):
-        # Convert the input to a 2D array
-        input_array = np.array([inputs])
+        # Initialize a list to store the predictions
+        predictions = []
 
-        # Use the Keras model to make predictions on the input
-        predictions = self.keras_model.predict(input_array)
+        # Iterate over the words in the input text
+        for i, word in enumerate(input_text.split()):
+            # Add the word to the input text for the model
+            input_text_temp = input_text + ' ' + word
 
-        # Pass the predictions to the consciousness
-        self.consciousness.transmit(predictions)
+            # Make a prediction with the model
+            prediction = self.predict(input_text_temp)
 
-        # Cycle through the neurons to make predictions and adjust weights with backpropagation
-        self.consciousness.cycle_neurons()
+            # Append the prediction to the list
+            predictions.append(prediction)
 
-        # Exit the Consciousness from the dreaming state
-        self.consciousness.set_state("awake")
+            # Print the predictions after every 3 words
+            if (i + 1) % 3 == 0:
+                output = np.mean(predictions)
+                print(f"Prediction after {i + 1} words: {output:.3f}")
 
-        # Evaluate the model's accuracy with the input vector
-        loss, accuracy = self.consciousness.evaluate(inputs, [0])
+        # Return the final prediction
+        return np.mean(predictions)
 
-        # Set the Consciousness neuron to the output neuron
-        self.consciousness.set_neuron_to(self.neurons[-1])
-
-        # Enter the Consciousness into a dreaming state
-        self.consciousness.set_state("dreaming")
-
-        # Output random memories from the neural network
-        num_memories = 5
-        for i in range(num_memories):
-            random_memory = self.consciousness.get_random_memory()
-            print(f"Random memory {i + 1}: {random_memory}")
-
-        return predictions
-
-
-class Model:
+class Model(object):
     def __init__(self, consciousness):
         self.consciousness = consciousness
         self.layers = []
@@ -285,8 +290,9 @@ if __name__ == '__main__':
     # Generate some random data for training
     X, y = generate_data(100)
 
-    # Create the model
-    model = Model()
+    # Create the Model object
+    consciousness = Consciousness(None)
+    model = Model(consciousness)
 
     # Define the layers of the model
     input_layer = NeuronLayer(20)
@@ -308,20 +314,30 @@ if __name__ == '__main__':
     # Save the model
     model.keras_model.save('model.h5')
 
+    # Deploy the model to GitHub
+    access_token = 'YOURAPIHERE'
+    repo_name = 'ArtiNeuron'
+    username = 'TheDogeBird'
+    file_path = 'model.h5'
+    folder = 'models'
+    commit_message = 'Add model.h5'
+    github_deploy(access_token, repo_name, username, file_path, folder, commit_message)
+
+    # Create a CustomModel object with the trained model
+    custom_model = CustomModel(keras.models.load_model('model.h5'), text)
+
     # Prompt the user for input and make predictions with the model
+    input_text = ''
     while True:
         text = input("Enter some text: ")
         if text.lower() == 'exit':
             break
-        custom_model = CustomModel(keras.models.load_model('model.h5'), text)
-        prediction = custom_model.run()
-        print(f"Prediction: {prediction}")
+        input_text += text + ' '
+        if len(input_text.split()) % 3 == 0:
+            prediction = custom_model.predict(input_text, X)
+            print(f"Prediction: {prediction}")
+            # Deploy the model to GitHub after every 3 words
+            github_deploy(access_token, repo_name, username, file_path, folder, commit_message)
 
-    # Deploy the model to GitHub
-    access_token = 'YOUR_ACCESS_TOKEN'
-    repo_name = 'YOUR_REPO_NAME'
-    username = 'YOUR_GITHUB_USERNAME'
-    file_path = 'model.h5'
-    folder = 'models'
-    commit_message = 'Add model.h5'
+    # Deploy the final model to GitHub
     github_deploy(access_token, repo_name, username, file_path, folder, commit_message)
