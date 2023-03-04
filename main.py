@@ -1,230 +1,327 @@
-import tensorflow as tf
-import numpy as np
-from collections import deque
-from neuron import Neuron
-from nltk.sentiment import SentimentIntensityAnalyzer
-import nltk
-import time
-import pickle
+import os
 import random
+import keras
+import numpy as np
+import nltk
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.optimizers import Adam
+from sklearn.model_selection import train_test_split
+import pandas as pd
+from github import Github
+from github import InputFileContent
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+import requests
 
-nltk.download('punkt')
 nltk.download('vader_lexicon')
 
-# Create an instance of the SentimentIntensityAnalyzer
-sid = SentimentIntensityAnalyzer()
+if not os.path.exists('data'):
+    os.makedirs('data')
+
+# Prompt the user for input
+text = input("Enter some text: ")
+
+# Write the input to the CSV file
+with open('data/sentiment_analysis.csv', 'a') as f:
+    f.write(f"{text}\n")
+
+import requests
+
+def github_deploy(access_token, repo_name, username, file_path, folder, commit_message):
+    # Authenticate with GitHub API
+    headers = {"Authorization": f"Token {access_token}"}
+
+    # Get user and repository
+    url = f"https://api.github.com/repos/{username}/{repo_name}/contents/{folder}/{file_path}"
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        sha = response.json()['sha']
+    else:
+        sha = ''
+
+    # Read file content
+    with open(file_path, 'rb') as f:
+        content = f.read()
+
+    # Create file on GitHub
+    url = f"https://api.github.com/repos/{username}/{repo_name}/contents/{folder}/{file_path}"
+    payload = {
+        "message": commit_message,
+        "content": content.decode('utf-8'),
+        "sha": sha
+    }
+    response = requests.put(url, headers=headers, json=payload)
+
+    if response.status_code == 201:
+        print(f"File '{file_path}' successfully uploaded to '{folder}' folder in '{repo_name}' repository!")
+    else:
+        print("Something went wrong. File upload unsuccessful.")
 
 
-class NeuralNetwork(tf.keras.Model):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+# Define the sigmoid function
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
-        # Define the layers
-        self.embedding = tf.keras.layers.Embedding(input_dim=10000, output_dim=32)
-        self.lstm = tf.keras.layers.LSTM(units=32, return_sequences=True)
-        self.attention = tf.keras.layers.Attention()
-        self.dense1 = tf.keras.layers.Dense(units=32, activation='relu')
-        self.dense2 = tf.keras.layers.Dense(units=1, activation='sigmoid')
+# Define the Neuron class
+class Neuron:
+    def __init__(self):
+        self.inputs = []
+        self.outputs = []
+        self.weights = []
+        self.bias = 0
+        self.error = 0
 
-    def call(self, inputs, **kwargs):
-        # Define a deque to store out-of-range indices
-        index_queue = deque(maxlen=100)
+    def connect(self, neuron):
+        self.outputs.append(neuron)
+        neuron.inputs.append(self)
+        self.weights.append(random.uniform(-1, 1))
 
-        # Replace indices outside the expected range with 0 and add them to the index queue
-        inputs = tf.where(inputs < 10000, inputs, tf.constant(0, dtype=tf.int32))
-        for i, row in enumerate(inputs):
-            for j, val in enumerate(row):
-                if val == 0:
-                    index_queue.append((i, j))
+    def activate(self):
+        x = 0
+        for i in range(len(self.inputs)):
+            x += self.inputs[i].get_output() * self.weights[i]
+        x += self.bias
+        self.output = sigmoid(x)
 
-        # Pass input through embedding layer
-        x = self.embedding(inputs)
+    def get_output(self):
+        return self.output
 
-        # Pass embedded input through LSTM layer
-        x = self.lstm(x)
+    def update_weights(self, error, learning_rate):
+        for i in range(len(self.inputs)):
+            self.weights[i] -= learning_rate * error * self.inputs[i].get_output()
+        self.bias -= learning_rate * error
+        self.error = error
 
-        # Compute attention weights and apply them to the LSTM output
-        attention_weights = self.attention([x, x])
-        x = tf.keras.layers.Dot(axes=(1, 1))([attention_weights, x])
+# Define the NeuronLayer class
+class NeuronLayer:
+    def __init__(self, num_neurons):
+        self.num_neurons = num_neurons
+        self.neurons = [Neuron() for _ in range(num_neurons)]
+        self.num_neurons = num_neurons
+        self.weights = np.random.rand(num_neurons)
+        self.bias = np.random.rand()
 
-        # Pass attention output through dense layer
-        x = self.dense1(x)
+    def connect_layers(self, next_layer):
+        for neuron in self.neurons:
+            for next_neuron in next_layer.neurons:
+                neuron.connect(next_neuron)
 
-        # Pass dense output through output layer
-        output = self.dense2(x)
+class Consciousness:
+    def __init__(self, model):
+        self.model = model
+        self.memory = []
+        self.state = "awake"
+        self.current_neuron = None
 
-        return output, index_queue
+    def transmit(self, input_vector):
+        self.memory.append(input_vector)
+        self.current_neuron = self.model.neurons[0]
+        for i in range(len(input_vector)):
+            self.current_neuron.inputs[i].output = input_vector[i]
+
+    def cycle_neurons(self):
+        while self.current_neuron != self.model.neurons[-1]:
+            self.current_neuron.activate()
+            self.current_neuron = self.current_neuron.outputs[0]
+
+    def set_neuron_to(self, neuron):
+        self.current_neuron = neuron
+
+    def set_state(self, state):
+        self.state = state
+
+    def get_random_memory(self):
+        return self.memory[random.randint(0, len(self.memory) - 1)]
+
+    def evaluate(self, X_test, y_test):
+        loss, accuracy = self.model.keras_model.evaluate(X_test, y_test, verbose=0)
+        return loss, accuracy
 
 
-# Define the neuron model
-neuron_model = NeuralNetwork()
+# Define the CustomModel class
+class CustomModel:
+    def __init__(self, keras_model, text):
+        self.keras_model = keras_model
+        self.neurons = keras_model.layers
+        self.consciousness = Consciousness(keras_model)
+        self.model = Model(self.consciousness)
+        self.text = text
 
-# Compile the model
-neuron_model.compile(optimizer=tf.keras.optimizers.Adam(), loss='binary_crossentropy')
+    def run(self):
+        input_vector = text_to_vector(self.text)
+        self.consciousness.transmit(input_vector)
+        self.consciousness.cycle_neurons()
+        return self.consciousness.memory[-1]
+
+    def activate(self, inputs):
+        # Convert the input to a 2D array
+        input_array = np.array([inputs])
+
+        # Use the Keras model to make predictions on the input
+        predictions = self.keras_model.predict(input_array)
+
+        # Pass the predictions to the consciousness
+        self.consciousness.transmit(predictions)
+
+        # Cycle through the neurons to make predictions and adjust weights with backpropagation
+        self.consciousness.cycle_neurons()
+
+        # Exit the Consciousness from the dreaming state
+        self.consciousness.set_state("awake")
+
+        # Evaluate the model's accuracy with the input vector
+        loss, accuracy = self.consciousness.evaluate(inputs, [0])
+
+        # Set the Consciousness neuron to the output neuron
+        self.consciousness.set_neuron_to(self.neurons[-1])
+
+        # Enter the Consciousness into a dreaming state
+        self.consciousness.set_state("dreaming")
+
+        # Output random memories from the neural network
+        num_memories = 5
+        for i in range(num_memories):
+            random_memory = self.consciousness.get_random_memory()
+            print(f"Random memory {i + 1}: {random_memory}")
+
+        return predictions
 
 
-# Define function to stimulate neuron with input text
-def stimulate_neuron(model, input_text, word_index):
-    # Tokenize input text into words
-    tokens = nltk.word_tokenize(input_text)
+class Model:
+    def __init__(self, consciousness):
+        self.consciousness = consciousness
+        self.layers = []
+        self.keras_model = None  # Define keras_model attribute
+        self.X_val = None
+        self.y_val = None
 
-    # Convert tokens to word indices
-    word_indices = [word_index.get(t.lower(), 0) for t in tokens]
+    def add(self, layer):
+        self.layers.append(layer)
 
-    # Pad word indices to fixed length
-    padded_indices = tf.keras.preprocessing.sequence.pad_sequences([word_indices], maxlen=32, truncating='post')
+    def connect(self, layer1, layer2):
+        for neuron1 in layer1.neurons:
+            for neuron2 in layer2.neurons:
+                neuron1.connect(neuron2)
 
-    # Get model output and index queue
-    output, index_queue = model(padded_indices)
+    def train(self, X, y, learning_rate=0.1, num_epochs=100, batch_size=10, validation_data=None):
+        # Convert data to numpy arrays
+        X_train = np.array(X)
+        y_train = np.array(y)
 
-    # Handle out-of-range indices
-    while index_queue:
-        i, j = index_queue.popleft()
-        padded_indices[i,j] = 0
-        output, index_queue = model(padded_indices)
-
-    # Return the output value
-    return output.numpy()[0][0]
-
-# Define function to create new neurons based on the input text and sentiment
-def create_new_neurons(neuron_list, sentences, sentiment):
-    for i, sentence in enumerate(sentences):
-        # Analyze the sentiment of the sentence
-        scores = sid.polarity_scores(sentence)
-
-        # If the sentiment of the sentence matches the desired sentiment, create a new neuron
-        if scores['compound'] >= 0.5 and sentiment == 'positive':
-            print(f"Creating new positive ArtiNeuron for sentence {i}")
-            neuron_list.append(Neuron(sentence, sentiment))
-        elif scores['compound'] <= -0.5 and sentiment == 'negative':
-            print(f"Creating new negative ArtiNeuron for sentence {i}")
-            neuron_list.append(Neuron(sentence, sentiment))
+        # Split the data into training and validation sets
+        if validation_data is not None:
+            X_val, y_val = validation_data
+            self.X_val = X_val
+            self.y_val = y_val
         else:
-            print(f"Sentence {i} did not match desired sentiment")
+            X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Define the main function
-def main():
-    # Load the word index
-    word_index = tf.keras.datasets.imdb.get_word_index()
+        # Convert data to numpy arrays (again, after splitting)
+        X_train = np.array(X_train)
+        X_val = np.array(X_val)
+        y_train = np.array(y_train)
+        y_val = np.array(y_val)
 
-    # Define the neuron model
-    neuron_model = NeuralNetwork()
+        # ... code omitted for brevity ...
 
-    # Compile the model
-    neuron_model.compile(optimizer=tf.keras.optimizers.Adam(), loss='binary_crossentropy')
+        # Create the Keras model
+        self.keras_model = Sequential()
+        for i, layer in enumerate(self.layers):
+            if i == 0:
+                self.keras_model.add(Dense(layer.num_neurons, input_dim=X_train.shape[1], activation='relu'))
+            else:
+                self.keras_model.add(Dense(layer.num_neurons, activation='relu'))
+        self.keras_model.add(Dense(1, activation='sigmoid'))
 
-    # Define lists to store positive and negative neurons
-    positive_neurons = []
-    negative_neurons = []
+        # Compile the model
+        self.keras_model.compile(loss='binary_crossentropy', optimizer=Adam(learning_rate=learning_rate),
+                                 metrics=['accuracy'])
 
-    # Define a flag for the consciousness state
-    consciousness_state = True
+        # Train the model
+        history = self.keras_model.fit(X_train, y_train, epochs=num_epochs, batch_size=batch_size,
+                                       validation_data=(X_val, y_val))
 
-    # Start the user input loop
-    while True:
-        if consciousness_state:
-            input_text = input("Enter some text: ").strip()
+        # Get the training and validation accuracies for each epoch
+        train_accs = history.history['accuracy']
+        val_accs = history.history['val_accuracy']
 
-            if input_text.lower() == 'quit':
-                break
+        # Print the accuracy for each epoch
+        for epoch in range(num_epochs):
+            print(f"Epoch {epoch + 1} - Train accuracy: {train_accs[epoch]:.4f} - Val accuracy: {val_accs[epoch]:.4f}")
 
-            # Stimulate the original neuron with input text
-            output = stimulate_neuron(neuron_model, input_text)
-            print(f"Output: {output}")
+        # Return the final loss and accuracy
+        return history.history['loss'][-1], history.history['accuracy'][-1]
 
-            # Create new neurons based on the input text and output sentiment
-            if output >= 0.5:
-                create_new_neurons(positive_neurons, [input_text], 'positive')
-            elif output <= 0.5:
-                create_new_neurons(negative_neurons, [input_text], 'negative')
 
-            # Print the current state of the positive and negative neurons
-            print("Positive neurons:")
-            for i, neuron in enumerate(positive_neurons):
-                print(f"ArtiNeuron {i}: {neuron.text} | Sentiment: {neuron.sentiment}")
-            print("Negative neurons:")
-            for i, neuron in enumerate(negative_neurons):
-                print(f"ArtiNeuron {i}: {neuron.text} | Sentiment: {neuron.sentiment}")
+def generate_data(num_samples, X=None):
+    if X is None:
+        X = np.random.rand(num_samples, 3)  # input features
+    y = np.random.randint(0, 2, size=num_samples)  # output labels
+    return X, y
 
-            # Enter the sleeping state
-            consciousness_state = False
-        else:
-            # Simulate the dream state by randomly stimulating neurons
-            print("Dreaming...")
-            for i in range(10):
-                neuron_list = positive_neurons if i % 2 == 0 else negative_neurons
-                if neuron_list:
-                    random_neuron = random.choice(neuron_list)
-                    print(f"Randomly stimulating ArtiNeuron {neuron_list.index(random_neuron)}: {random_neuron.text}")
-            # Enter the awake state
-            consciousness_state = True
+def get_word_syllables(word):
+    # Code to count the number of syllables in a word
+    return 0
 
-    # Save the positive and negative neuron lists to a file
-    with open('positive_neurons.pkl', 'wb') as f:
-        pickle.dump(positive_neurons, f)
-    with open('negative_neurons.pkl', 'wb') as f:
-        pickle.dump(negative_neurons, f)
+def get_sentiment_scores(text):
+    sid = SentimentIntensityAnalyzer()
+    scores = sid.polarity_scores(text)
+    return [scores['neg'], scores['neu'], scores['pos'], scores['compound']]
+
+
+def text_to_vector(text):
+    sentiment_scores = get_sentiment_scores(text)
+    words = text.split()
+    vector = []
+    for word in words:
+        vector.append(ord(word[0]))
+        vector.append(ord(word[-1]))
+        vector.append(len(word))
+        vector.append(get_word_syllables(word))
+        vector.extend(sentiment_scores)
+    return np.array(vector)
 
 if __name__ == '__main__':
-    # Load the word index
-    word_index = tf.keras.datasets.imdb.get_word_index()
+    # Generate some random data for training
+    X, y = generate_data(100)
 
-    # Define the neuron model
-    neuron_model = NeuralNetwork()
+    # Create the model
+    model = Model()
 
-    # Compile the model
-    neuron_model.compile(optimizer=tf.keras.optimizers.Adam(), loss='binary_crossentropy')
+    # Define the layers of the model
+    input_layer = NeuronLayer(20)
+    hidden_layer = NeuronLayer(10)
+    output_layer = NeuronLayer(1)
 
-    # Define lists to store positive and negative neurons
-    positive_neurons = []
-    negative_neurons = []
+    # Add the layers to the model
+    model.add(input_layer)
+    model.add(hidden_layer)
+    model.add(output_layer)
 
-    # Define variables for the consciousness domain
-    consciousness_domain = []
-    active_consciousness = False
+    # Connect the layers
+    model.connect(input_layer, hidden_layer)
+    model.connect(hidden_layer, output_layer)
 
-    # Start the user input loop
+    # Train the model
+    loss, accuracy = model.train(X, y)
+
+    # Save the model
+    model.keras_model.save('model.h5')
+
+    # Prompt the user for input and make predictions with the model
     while True:
-        # Check if the consciousness domain is active
-        if not active_consciousness:
-            # Generate a random output from the stored neurons in the consciousness domain
-            random_index = np.random.randint(0, len(consciousness_domain))
-            random_neuron = consciousness_domain[random_index]
-            print(f"Random neuron output while sleeping: {random_neuron.text}")
-        else:
-            # Prompt the user for input
-            input_text = input("Enter some text: ").strip()
+        text = input("Enter some text: ")
+        if text.lower() == 'exit':
+            break
+        custom_model = CustomModel(keras.models.load_model('model.h5'), text)
+        prediction = custom_model.run()
+        print(f"Prediction: {prediction}")
 
-            if input_text.lower() == 'quit':
-                break
-
-            # Stimulate the original neuron with input text
-            output, dream = stimulate_neuron(neuron_model, input_text)
-
-            # Create new neurons based on the input text and output sentiment
-            if output >= 0.5:
-                create_new_neurons(positive_neurons, [input_text], 'positive', dream)
-            elif output <= 0.5:
-                create_new_neurons(negative_neurons, [input_text], 'negative', dream)
-
-            # Print the current state of the positive and negative neurons
-            print("Positive neurons:")
-            for i, neuron in enumerate(positive_neurons):
-                print(f"ArtiNeuron {i}: {neuron.text} | Sentiment: {neuron.sentiment}")
-            print("Negative neurons:")
-            for i, neuron in enumerate(negative_neurons):
-                print(f"ArtiNeuron {i}: {neuron.text} | Sentiment: {neuron.sentiment}")
-
-            # Add the input and output to the consciousness domain
-            consciousness_domain.append(Neuron(input_text, 'input'))
-            consciousness_domain.extend(dream)
-            consciousness_domain.append(Neuron(str(output.numpy()[0][0]), 'output'))
-
-        # Update the active consciousness state
-        active_consciousness = not active_consciousness
-
-        # Wait for a few seconds before continuing
-        time.sleep(5)
-
-    # End the program
-    print("Goodbye!")
+    # Deploy the model to GitHub
+    access_token = 'YOUR_ACCESS_TOKEN'
+    repo_name = 'YOUR_REPO_NAME'
+    username = 'YOUR_GITHUB_USERNAME'
+    file_path = 'model.h5'
+    folder = 'models'
+    commit_message = 'Add model.h5'
+    github_deploy(access_token, repo_name, username, file_path, folder, commit_message)
